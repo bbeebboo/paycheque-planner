@@ -1,1 +1,198 @@
+from pathlib import Path
+from zipfile import ZipFile, ZIP_DEFLATED
+
+base = Path("/mnt/data/paycheque_planner_webapp")
+base.mkdir(exist_ok=True)
+
+html = r'''<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111111">
+<title>Paycheque Planner</title>
+<link rel="manifest" href="manifest.json">
+<style>
+:root{--bg:#101010;--panel:#1a1a1a;--panel2:#222;--gold:#d6b45d;--text:#f4f0e5;--muted:#b8b2a3;--line:#38352b;--red:#ff827c;--green:#9ed6a5}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px system-ui,-apple-system,Segoe UI,sans-serif}
+header{padding:22px 16px 16px;border-bottom:1px solid var(--line);background:#151515;position:sticky;top:0;z-index:3}
+.wrap{max-width:1050px;margin:auto}h1{font-size:1.35rem;margin:0;color:var(--gold)}header p{margin:5px 0 0;color:var(--muted);font-size:.9rem}
+nav{display:flex;gap:8px;overflow:auto;padding:12px 0 0}.tab{white-space:nowrap;border:1px solid var(--line);background:var(--panel);color:var(--text);border-radius:10px;padding:10px 13px;cursor:pointer}.tab.active{background:var(--gold);color:#17130a;border-color:var(--gold);font-weight:700}
+main{max-width:1050px;margin:auto;padding:18px 14px 48px}.page{display:none}.page.active{display:block}
+h2{font-size:1.2rem;margin:4px 0 14px}h3{font-size:1rem;margin:0 0 12px;color:var(--gold)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}.card,form,.section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:14px}
+.kicker{font-size:.85rem;color:var(--muted)}.value{font-size:1.55rem;font-weight:750;margin-top:6px;overflow-wrap:anywhere}.small{font-size:.88rem;color:var(--muted);line-height:1.45}
+label{display:block;font-size:.88rem;color:var(--muted);margin:10px 0 5px}input,select,textarea{width:100%;padding:11px;border-radius:8px;border:1px solid #4a463a;background:#101010;color:var(--text);font:inherit}button{font:inherit}.primary,.danger,.secondary{border:0;border-radius:9px;padding:11px 14px;cursor:pointer;margin-top:12px}.primary{background:var(--gold);color:#17130a;font-weight:700}.secondary{background:#343127;color:var(--text);border:1px solid #514a36}.danger{background:#482725;color:#ffe0dc}.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:570px}th,td{text-align:left;padding:10px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--gold);font-size:.85rem}td{font-size:.92rem}.pill{display:inline-block;padding:3px 8px;border-radius:20px;background:#343127;color:var(--gold);font-size:.8rem}.warning{border:1px solid #8a4c43;background:#2a1918;border-radius:10px;padding:12px;margin:10px 0;color:#ffd0c9}.good{color:var(--green)}.empty{padding:16px;color:var(--muted);text-align:center}.actions{display:flex;gap:6px;flex-wrap:wrap}.actions button{margin:0;padding:6px 9px;font-size:.82rem}
+@media(min-width:700px){header{padding-left:24px;padding-right:24px}main{padding:24px}}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+<h1>✦ Personal Paycheque Planner</h1><p>Black &amp; gold · Biweekly planning · No daily-spending tracker</p>
+<nav aria-label="Main navigation">
+<button class="tab active" data-page="dashboard">Dashboard</button><button class="tab" data-page="income">Income</button><button class="tab" data-page="bills">Bills</button><button class="tab" data-page="debts">Debt tracker</button><button class="tab" data-page="planner">Paycheque plan</button><button class="tab" data-page="settings">Backup &amp; settings</button>
+</nav></div></header>
+<main>
+<section class="page active" id="dashboard">
+<h2>Your financial overview</h2>
+<div class="grid">
+<div class="card"><div class="kicker">Usual net paycheque</div><div class="value" id="dashPay">$0.00</div><div class="small" id="dashPayDate">Add your payday in Income.</div></div>
+<div class="card"><div class="kicker">Monthly bills (estimated)</div><div class="value" id="dashBills">$0.00</div><div class="small">Recurring bills converted to a monthly average.</div></div>
+<div class="card"><div class="kicker">Suggested reserve per cheque</div><div class="value" id="dashReserve">$0.00</div><div class="small">Monthly-equivalent bills × 12 ÷ 26, plus debt plan payments.</div></div>
+<div class="card"><div class="kicker">Projected left after reserves</div><div class="value" id="dashLeft">$0.00</div><div class="small">An estimate, not your live bank balance.</div></div>
+</div>
+<div class="section"><h3>Upcoming obligations</h3><div id="upcoming"></div></div>
+<div class="section"><h3>Important</h3><p class="small">This first version saves entries in this browser on this device. It does not connect to your bank, confirm that a bill was paid, or sync between devices. Use Backup &amp; settings to export a backup regularly.</p></div>
+</section>
+<section class="page" id="income">
+<h2>Income &amp; payday</h2>
+<form id="incomeForm"><div class="row">
+<div><label for="payAmount">Usual take-home pay per cheque ($)</label><input id="payAmount" type="number" min="0" step="0.01" placeholder="e.g. 1300"></div>
+<div><label for="nextPayday">Next payday</label><input id="nextPayday" type="date"></div>
+</div><button class="primary">Save income settings</button></form>
+<div class="section"><h3>Optional paycheque history</h3><form id="payHistoryForm"><div class="row"><div><label for="historyDate">Payday</label><input id="historyDate" type="date" required></div><div><label for="historyAmount">Net amount ($)</label><input id="historyAmount" type="number" min="0" step=".01" required></div><div><label for="historyNote">Notes (optional)</label><input id="historyNote" placeholder="e.g. overtime"></div></div><button class="primary">Add paycheque</button></form><div id="historyTable"></div></div>
+</section>
+<section class="page" id="bills">
+<h2>Recurring bills &amp; subscriptions</h2>
+<p class="small">Add each regular payment once. Monthly equivalents help you set money aside consistently; due-date planning also checks which obligations fall before the next payday.</p>
+<form id="billForm"><input id="billId" type="hidden"><div class="row">
+<div><label for="billName">Bill / description</label><input id="billName" required placeholder="Rent"></div>
+<div><label for="billCategory">Category</label><select id="billCategory"><option>Housing</option><option>Utilities</option><option>Phone &amp; Internet</option><option>Insurance</option><option>Prescription / Health</option><option>Subscription</option><option>Debt payment</option><option>Other</option></select></div>
+<div><label for="billAmount">Amount ($)</label><input id="billAmount" type="number" min="0" step=".01" required placeholder="1500"></div>
+<div><label for="billFrequency">Frequency</label><select id="billFrequency"><option value="Monthly">Monthly</option><option value="Weekly">Weekly</option><option value="Biweekly">Biweekly</option><option value="Quarterly">Quarterly</option><option value="Annually">Annually</option></select></div>
+<div><label for="billDue">Next due date</label><input id="billDue" type="date" required></div>
+<div><label for="billNotes">Notes (optional)</label><input id="billNotes" placeholder="e.g. paid by e-transfer"></div>
+</div><button class="primary" id="billSubmit">Add bill</button> <button class="secondary" type="button" id="billCancel" hidden>Cancel edit</button></form>
+<div class="section"><h3>Your recurring bills</h3><div id="billTable"></div></div>
+</section>
+<section class="page" id="debts">
+<h2>Debt tracker</h2>
+<p class="small">Record current or previous debts. Enter the outstanding balance remaining today; the app does not infer interest or automatically reduce balances unless you record a payment.</p>
+<form id="debtForm"><input id="debtId" type="hidden"><div class="row">
+<div><label for="debtName">Debt / creditor</label><input id="debtName" required placeholder="e.g. Credit card"></div>
+<div><label for="debtOriginal">Original debt ($, optional)</label><input id="debtOriginal" type="number" min="0" step=".01" placeholder="Optional"></div>
+<div><label for="debtBalance">Current outstanding balance ($)</label><input id="debtBalance" type="number" min="0" step=".01" required></div>
+<div><label for="debtPayment">Planned payment ($ per month)</label><input id="debtPayment" type="number" min="0" step=".01" value="0"></div>
+<div><label for="debtDue">Next payment due (optional)</label><input id="debtDue" type="date"></div>
+<div><label for="debtNotes">Notes (optional)</label><input id="debtNotes" placeholder="e.g. interest rate, if known"></div>
+</div><button class="primary" id="debtSubmit">Add debt</button> <button class="secondary" type="button" id="debtCancel" hidden>Cancel edit</button></form>
+<div class="section"><h3>Your debts</h3><div id="debtTable"></div></div>
+<form id="debtPaymentForm"><h3>Record a debt payment</h3><div class="row"><div><label for="paymentDebt">Debt</label><select id="paymentDebt" required></select></div><div><label for="paymentDate">Payment date</label><input id="paymentDate" type="date" required></div><div><label for="paymentAmount">Amount paid ($)</label><input id="paymentAmount" type="number" min=".01" step=".01" required></div></div><button class="primary">Record payment and reduce balance</button></form>
+<div class="section"><h3>Payment history</h3><div id="debtHistory"></div></div>
+</section>
+<section class="page" id="planner">
+<h2>Paycheque planner</h2>
+<p class="small">Enter your pay amount and next payday in Income first. The planner assigns each bill to the last scheduled payday on or before its due date. If you are starting with no reserved money, bills due before your next payday need special attention.</p>
+<div class="section"><h3>Next paycheque</h3><div id="nextChequeSummary"></div></div>
+<div class="section"><h3>Upcoming bills and suggested funding cheque</h3><div id="planTable"></div></div>
+<div class="section"><h3>Reserve guidance</h3><div id="reserveAdvice"></div></div>
+</section>
+<section class="page" id="settings">
+<h2>Backup &amp; settings</h2>
+<div class="section"><h3>Your data stays in this browser</h3><p class="small">For privacy, this starter version stores information locally on this device. Clearing browser data can erase it. Export a backup and keep it somewhere safe. A hosted version with secure sign-in and cloud sync can be added later.</p>
+<button class="primary" id="exportBtn">Export backup (JSON)</button>
+<label for="importFile">Restore a previously exported backup</label><input id="importFile" type="file" accept="application/json">
+<button class="danger" id="clearBtn">Delete all local planner data</button>
+<p class="small">This is a planning tool, not financial advice. Confirm due dates, minimum payments, interest and available bank funds yourself.</p></div>
+</section>
+</main>
+<script>
+const KEY='personalPaychequePlanner.v1';
+const emptyState=()=>({income:{amount:'',nextPayday:''},history:[],bills:[],debts:[],debtPayments:[]});
+let state=load();
+function load(){try{return {...emptyState(),...JSON.parse(localStorage.getItem(KEY)||'{}')}}catch(e){return emptyState()}}
+function save(){localStorage.setItem(KEY,JSON.stringify(state));render()}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function money(n){return new Intl.NumberFormat('en-CA',{style:'currency',currency:'CAD'}).format(Number(n)||0)}
+function dateObj(s){if(!s)return null;let d=new Date(s+'T12:00:00');return Number.isNaN(d.getTime())?null:d}
+function dateText(s){const d=dateObj(s);return d?d.toLocaleDateString('en-CA',{year:'numeric',month:'short',day:'numeric'}):'Not set'}
+function addDays(d,n){let x=new Date(d);x.setDate(x.getDate()+n);return x}
+function iso(d){return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
+function monthly(b){const n=Number(b.amount)||0;return n*({Weekly:52,Biweekly:26,Monthly:12,Quarterly:4,Annually:1}[b.frequency]||0)/12}
+function totalBillsMonthly(){return state.bills.reduce((s,b)=>s+monthly(b),0)}
+function debtMonthly(){return state.debts.reduce((s,d)=>s+(Number(d.payment)||0),0)}
+function nextPayDates(count=26){const first=dateObj(state.income.nextPayday);if(!first)return [];return Array.from({length:count},(_,i)=>addDays(first,14*i))}
+function assignedPayday(due){const dueD=dateObj(due);const first=dateObj(state.income.nextPayday);if(!dueD||!first)return null;let chosen=null;for(let i=0;i<40;i++){let p=addDays(first,14*i);if(p<=dueD)chosen=p;else break}return chosen}
+function render(){
+ document.getElementById('dashPay').textContent=money(state.income.amount);
+ document.getElementById('dashPayDate').textContent=state.income.nextPayday?'Next payday: '+dateText(state.income.nextPayday):'Add your payday in Income.';
+ document.getElementById('dashBills').textContent=money(totalBillsMonthly());
+ const reserve=(totalBillsMonthly()+debtMonthly())*12/26;
+ document.getElementById('dashReserve').textContent=money(reserve);
+ const left=Number(state.income.amount||0)-reserve;
+ document.getElementById('dashLeft').textContent=money(left);
+ document.getElementById('dashLeft').className='value '+(left<0?'':'good');
+ const sorted=[...state.bills].sort((a,b)=>(a.due||'').localeCompare(b.due||''));
+ document.getElementById('upcoming').innerHTML=sorted.length?`<div class="table-wrap"><table><thead><tr><th>Bill</th><th>Amount</th><th>Due</th><th>Suggested funding payday</th></tr></thead><tbody>${sorted.slice(0,8).map(b=>`<tr><td>${esc(b.name)}</td><td>${money(b.amount)}</td><td>${dateText(b.due)}</td><td>${dateText(assignedPayday(b.due)?.toISOString().slice(0,10))}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No bills added yet. Add your first recurring bill in the Bills tab.</div>';
+ renderIncome();renderBills();renderDebts();renderPlanner();
+}
+function renderIncome(){
+ document.getElementById('payAmount').value=state.income.amount;
+ document.getElementById('nextPayday').value=state.income.nextPayday;
+ const h=[...state.history].sort((a,b)=>b.date.localeCompare(a.date));
+ document.getElementById('historyTable').innerHTML=h.length?`<div class="table-wrap"><table><thead><tr><th>Payday</th><th>Net amount</th><th>Notes</th><th></th></tr></thead><tbody>${h.map(x=>`<tr><td>${dateText(x.date)}</td><td>${money(x.amount)}</td><td>${esc(x.note)}</td><td><button class="danger" onclick="removeHistory('${x.id}')">Delete</button></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No paycheque history entered.</div>';
+}
+function renderBills(){
+ document.getElementById('billTable').innerHTML=state.bills.length?`<div class="table-wrap"><table><thead><tr><th>Bill</th><th>Amount / frequency</th><th>Monthly average</th><th>Next due</th><th>Actions</th></tr></thead><tbody>${state.bills.map(b=>`<tr><td><strong>${esc(b.name)}</strong><br><span class="small">${esc(b.category)}</span></td><td>${money(b.amount)} / ${esc(b.frequency)}</td><td>${money(monthly(b))}</td><td>${dateText(b.due)}</td><td><div class="actions"><button class="secondary" onclick="editBill('${b.id}')">Edit</button><button class="danger" onclick="deleteBill('${b.id}')">Delete</button></div></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No recurring bills yet.</div>';
+}
+function renderDebts(){
+ document.getElementById('debtTable').innerHTML=state.debts.length?`<div class="table-wrap"><table><thead><tr><th>Debt</th><th>Original</th><th>Balance now</th><th>Monthly plan</th><th>Next due</th><th>Actions</th></tr></thead><tbody>${state.debts.map(d=>`<tr><td><strong>${esc(d.name)}</strong><br><span class="small">${esc(d.notes)}</span></td><td>${d.original===''?'—':money(d.original)}</td><td>${money(d.balance)}</td><td>${money(d.payment)}</td><td>${dateText(d.due)}</td><td><div class="actions"><button class="secondary" onclick="editDebt('${d.id}')">Edit</button><button class="danger" onclick="deleteDebt('${d.id}')">Delete</button></div></td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No debts entered yet.</div>';
+ const sel=document.getElementById('paymentDebt');sel.innerHTML=state.debts.length?state.debts.map(d=>`<option value="${d.id}">${esc(d.name)} — ${money(d.balance)}</option>`).join(''):'<option value="">Add a debt first</option>';
+ document.getElementById('debtHistory').innerHTML=state.debtPayments.length?`<div class="table-wrap"><table><thead><tr><th>Date</th><th>Debt</th><th>Payment</th><th>Note</th></tr></thead><tbody>${[...state.debtPayments].sort((a,b)=>b.date.localeCompare(a.date)).map(p=>`<tr><td>${dateText(p.date)}</td><td>${esc(state.debts.find(d=>d.id===p.debtId)?.name||'Debt removed')}</td><td>${money(p.amount)}</td><td>Recorded payment</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">No debt payments recorded yet.</div>';
+}
+function renderPlanner(){
+ const amount=Number(state.income.amount)||0, first=dateObj(state.income.nextPayday);
+ document.getElementById('nextChequeSummary').innerHTML=first?`<p>Next payday: <strong>${dateText(state.income.nextPayday)}</strong></p><p>Usual take-home: <strong>${money(amount)}</strong></p><p>Suggested recurring reserve: <strong>${money((totalBillsMonthly()+debtMonthly())*12/26)}</strong></p><p>Estimated left after reserve: <strong>${money(amount-(totalBillsMonthly()+debtMonthly())*12/26)}</strong></p>`:'<p class="small">Add your usual net pay and next payday in the Income tab to calculate the plan.</p>';
+ const rows=[...state.bills].sort((a,b)=>a.due.localeCompare(b.due));
+ document.getElementById('planTable').innerHTML=rows.length?`<div class="table-wrap"><table><thead><tr><th>Bill</th><th>Amount</th><th>Due date</th><th>Funding payday</th><th>Timing note</th></tr></thead><tbody>${rows.map(b=>{let p=assignedPayday(b.due);let due=dateObj(b.due);let note=!first?'Enter next payday':(!p?'Due before the next payday listed; check available savings':(due&&p&&((due-p)/86400000)<14?'Payday before due date':'Assigned to latest payday on/before due date'));return `<tr><td>${esc(b.name)}</td><td>${money(b.amount)}</td><td>${dateText(b.due)}</td><td>${p?dateText(iso(p)):'No suitable payday found'}</td><td>${esc(note)}</td></tr>`}).join('')}</tbody></table></div>`:'<div class="empty">Add bills to build your paycheque plan.</div>';
+ let advice='';if(!first){advice='<p class="small">Enter your next payday and usual net pay to see reserve guidance.</p>'}else{const res=(totalBillsMonthly()+debtMonthly())*12/26;advice=`<p>Suggested average reserve: <strong>${money(res)}</strong> from each biweekly cheque.</p>`;if(amount<res)advice+=`<div class="warning">Your usual cheque (${money(amount)}) is lower than the estimated reserve (${money(res)}). Your planned obligations may exceed income.</div>`;const soon=state.bills.filter(b=>dateObj(b.due)&&dateObj(b.due)<first);if(soon.length)advice+=`<div class="warning">At least one bill is due before the next payday: ${soon.map(b=>esc(b.name)+' ('+dateText(b.due)+')').join(', ')}. Check that you already have enough money set aside.</div>`;else advice+='<p class="small">This estimate assumes no existing arrears and does not know your current bank balance. Check the timing and your available funds before paying bills.</p>'}
+ document.getElementById('reserveAdvice').innerHTML=advice;
+}
+function id(){return crypto.randomUUID?crypto.randomUUID():String(Date.now())+Math.random().toString(16).slice(2)}
+document.getElementById('incomeForm').addEventListener('submit',e=>{e.preventDefault();state.income={amount:document.getElementById('payAmount').value,nextPayday:document.getElementById('nextPayday').value};save();alert('Income settings saved.')});
+document.getElementById('payHistoryForm').addEventListener('submit',e=>{e.preventDefault();state.history.push({id:id(),date:historyDate.value,amount:historyAmount.value,note:historyNote.value});e.target.reset();save()});
+window.removeHistory=(x)=>{state.history=state.history.filter(h=>h.id!==x);save()};
+document.getElementById('billForm').addEventListener('submit',e=>{e.preventDefault();const x={id:billId.value||id(),name:billName.value.trim(),category:billCategory.value,amount:billAmount.value,frequency:billFrequency.value,due:billDue.value,notes:billNotes.value.trim()};const i=state.bills.findIndex(b=>b.id===x.id);if(i>=0)state.bills[i]=x;else state.bills.push(x);resetBill();save()});
+function resetBill(){billForm.reset();billId.value='';billSubmit.textContent='Add bill';billCancel.hidden=true}
+document.getElementById('billCancel').addEventListener('click',resetBill);
+window.editBill=(x)=>{const b=state.bills.find(z=>z.id===x);if(!b)return;billId.value=b.id;billName.value=b.name;billCategory.value=b.category;billAmount.value=b.amount;billFrequency.value=b.frequency;billDue.value=b.due;billNotes.value=b.notes||'';billSubmit.textContent='Save changes';billCancel.hidden=false;document.querySelector('[data-page="bills"]').click();window.scrollTo(0,0)};
+window.deleteBill=(x)=>{if(confirm('Delete this bill?')){state.bills=state.bills.filter(b=>b.id!==x);save()}};
+document.getElementById('debtForm').addEventListener('submit',e=>{e.preventDefault();const x={id:debtId.value||id(),name:debtName.value.trim(),original:debtOriginal.value,balance:debtBalance.value,payment:debtPayment.value||0,due:debtDue.value,notes:debtNotes.value.trim()};const i=state.debts.findIndex(d=>d.id===x.id);if(i>=0)state.debts[i]=x;else state.debts.push(x);resetDebt();save()});
+function resetDebt(){debtForm.reset();debtId.value='';debtPayment.value='0';debtSubmit.textContent='Add debt';debtCancel.hidden=true}
+document.getElementById('debtCancel').addEventListener('click',resetDebt);
+window.editDebt=(x)=>{const d=state.debts.find(z=>z.id===x);if(!d)return;debtId.value=d.id;debtName.value=d.name;debtOriginal.value=d.original;debtBalance.value=d.balance;debtPayment.value=d.payment;debtDue.value=d.due;debtNotes.value=d.notes||'';debtSubmit.textContent='Save changes';debtCancel.hidden=false;document.querySelector('[data-page="debts"]').click();window.scrollTo(0,0)};
+window.deleteDebt=(x)=>{if(confirm('Delete this debt record? Payment history will remain as history.')){state.debts=state.debts.filter(d=>d.id!==x);save()}};
+document.getElementById('debtPaymentForm').addEventListener('submit',e=>{e.preventDefault();const d=state.debts.find(x=>x.id===paymentDebt.value);const amt=Number(paymentAmount.value);if(!d||amt<=0)return alert('Choose a debt and enter a valid payment.');d.balance=String(Math.max(0,Number(d.balance)-amt).toFixed(2));state.debtPayments.push({id:id(),debtId:d.id,date:paymentDate.value,amount:amt});e.target.reset();paymentDate.value=iso(new Date());save()});
+document.querySelectorAll('.tab').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(b=>b.classList.toggle('active',b===btn));document.querySelectorAll('.page').forEach(p=>p.classList.toggle('active',p.id===btn.dataset.page))}));
+document.getElementById('exportBtn').addEventListener('click',()=>{const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='paycheque-planner-backup.json';a.click();URL.revokeObjectURL(a.href)});
+document.getElementById('importFile').addEventListener('change',async e=>{const f=e.target.files[0];if(!f)return;try{const d=JSON.parse(await f.text());if(!d.income||!Array.isArray(d.bills)||!Array.isArray(d.debts))throw new Error();if(confirm('Replace current planner data with this backup?')){state={...emptyState(),...d};save();alert('Backup restored.')}}catch(err){alert('That file does not look like a valid planner backup.')}e.target.value=''});
+document.getElementById('clearBtn').addEventListener('click',()=>{if(confirm('Permanently delete all planner data saved in this browser? Export a backup first if you need one.')){state=emptyState();save()}});
+if('serviceWorker' in navigator && location.protocol.startsWith('http'))navigator.serviceWorker.register('./sw.js').catch(()=>{});
+paymentDate.value=iso(new Date());
+render();
+</script>
+</body></html>'''
+
+manifest = '''{
+  "name": "Personal Paycheque Planner",
+  "short_name": "Pay Planner",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#101010",
+  "theme_color": "#111111",
+  "description": "A private biweekly paycheque and recurring bill planner."
+}'''
+sw = '''const CACHE="paycheque-planner-v1";
+const ASSETS=["./","./index.html","./manifest.json"];
+self.addEventListener("install",e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(ASSETS))));
+self.addEventListener("fetch",e=>e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request))));
+'''
+(base/"index.html").write_text(html, encoding="utf-8")
+(base/"manifest.json").write_text(manifest, encoding="utf-8")
+(base/"sw.js").write_text(sw, encoding="utf-8")
+zip_path="/mnt/data/Personal_Paycheque_Planner_Web_App.zip"
+with ZipFile(zip_path,"w",ZIP_DEFLATED) as z:
+    for p in base.iterdir():
+        z.write(p, arcname=p.name)
+print("Created", zip_path, "with", [p.name for p in base.iterdir()])
 
